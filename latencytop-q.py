@@ -43,10 +43,12 @@ FIELD_TO_NUM = {
     'avg': 3,
 }
 
+GROUPBY = ['top', 'low', 'sys']
+
 def gen_pids(procname, args):
     # Use pgrep to match procname, then ps to get all LWP pids (threads)
     if args.threads:
-        cmd="pgrep -f '{}' | xargs ps -olwp= -LC".format(procname)
+        cmd="pgrep -f '{}' | xargs ps -olwp= -Lp".format(procname)
     else:
         cmd="pgrep -f '{}'".format(procname)
     pipe = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
@@ -101,11 +103,15 @@ def format_bt(cmd, backtrace, args):
     # ~heuristics, to cleanup output
     backtrace = re.sub(r'__refrigerator ','', backtrace)
     backtrace = re.sub(r' system_call_fastpath','', backtrace)
-    if (args.only_sys):
+    if args.only_sys or args.groupby == 'sys':
         # Try leaving only e.g. SyS_write
         backtrace = re.sub(r'.* ([Ss]y[Ss]_[a-z_]+) *', '\g<1>', backtrace)
-        # else leave only 1 (top from backstrace)
-        backtrace = re.sub(r'.* ','', backtrace)
+        # else leave only the top from backtrace
+        backtrace = backtrace.split(" ")[-1]
+    elif args.groupby == 'top':
+        backtrace = backtrace.split(" ")[-1]
+    elif args.groupby == 'low':
+        backtrace = backtrace.split(" ")[0]
     if args.show_cmd:
         return '{}:\t{}'.format(cmd, backtrace)
     else:
@@ -150,12 +156,18 @@ def main():
     par.add_argument('-n', '--no-headers', action='store_true',
                      default = False, help='omit headers')
     par.add_argument('-s', '--only-sys', action='store_true',
-                     default = False, help='use only sys_call from backtrace')
+                     default = False,
+                     help='use only sys_call from backtrace (equal to "-g sys"')
+    par.add_argument('-g', '--groupby', choices = GROUPBY, default=None,
+                     help='group backtrace by different hi/low-level symbols')
     par.add_argument('-l', '--limit', type=int, action='store',
                      default = 0, help='limit output to last LIMIT lines')
     par.add_argument('-t', '--threads', action='store_true',
                      default = False, help='also expand threads (LWPs)')
     args = par.parse_args()
+    if args.only_sys and args.groupby:
+        raise argparse.ArgumentTypeError(
+            'Conflicting options: -s is a shortcut for "-g sys"')
     if len(args.procname) > 0:
         latency_show(args.procname[0], args)
     else:
