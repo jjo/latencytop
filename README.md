@@ -30,4 +30,7 @@ Non UI latencytop stats reporter
 
 # Ditto, sort by avg latency
 ./latencytop-q.py -c -o avg -l20 .
+
+# Ditto, group by low level calls
+./latencytop-q.py -c -o avg -l20 -g low .
 ```
