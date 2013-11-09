@@ -1,7 +1,6 @@
 latencytop
 ==========
-
-linux latencytop tools
+Non UI latencytop stats reporter
 
 # Usage
 ```shell
