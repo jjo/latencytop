@@ -29,6 +29,9 @@
 ./latencytop-q.py -c -o avg -l20 .
 # Ditto, group by low level calls
 ./latencytop-q.py -c -o avg -l20 -g low .
+# Delta stats:
+./latencytop-q.py -f ~/tmp/lat.last -cs . # 1st: will create if not found
+./latencytop-q.py -f ~/tmp/lat.last -cs . # 2nd: will use + update
 """
 
 import subprocess
@@ -156,11 +159,11 @@ def latency_show(procname, args):
         metric = metric_init(key, (f_cnt, f_sum, f_max, 0))
         metric_merge(data, key, metric)
 
-    if args.state_file and os.path.exists(args.state_file):
-        prev_data = pickle.load(open(args.state_file, "rb"))
+    prev_data = None
+    if args.state_file:
+        if os.path.exists(args.state_file):
+            prev_data = pickle.load(open(args.state_file, "rb"))
         pickle.dump(data, open(args.state_file, "wb"))
-    else:
-        prev_data = None
 
     if not args.no_headers:
         print "{0:>6s}\t{1:>8s}\t{2:>8s}\t{3:>8s}\t{4:8s}".format(

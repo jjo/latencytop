@@ -33,4 +33,8 @@ Non UI latencytop stats reporter
 
 # Ditto, group by low level calls
 ./latencytop-q.py -c -o avg -l20 -g low .
+
+# Delta stats:
+./latencytop-q.py -f ~/tmp/lat.last -cs . # 1st: will create if not found
+./latencytop-q.py -f ~/tmp/lat.last -cs . # 2nd: will use + update
 ```
