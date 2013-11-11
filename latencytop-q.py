@@ -37,15 +37,44 @@ import argparse
 import os
 import re
 import signal
+import cPickle as pickle
 
-FIELD_TO_NUM = {
-    'cnt': 0,
-    'sum': 1,
-    'max': 2,
-    'avg': 3,
-}
-
+METRICS = ['cnt', 'sum', 'max', 'avg']
 GROUPBY = ['top', 'low', 'sys']
+
+
+def metric_init(key, metrics=(0, 0, 0, 0)):
+    "Initialize a metrics entry as a dictionary, including its key"
+    metrics = [int(x) for x in metrics]
+    metrics_dict = dict(zip(METRICS, metrics))
+    metrics_dict["key"] = key
+    return metrics_dict
+
+
+def metric_merge(data_dict, key, metric):
+    "Merge/aggregate each new latencytop line"
+    curr_val = data_dict.get(key, metric_init(key))
+    # cnt: accumulate
+    curr_val["cnt"] += metric["cnt"]
+    # sum: accumulate
+    curr_val["sum"] += metric["sum"]
+    # max: compare and set new max
+    curr_val["max"] = max(curr_val["max"], metric["max"])
+    # avg: calculate avg as sum/cnt
+    curr_val["avg"] = curr_val["sum"] / curr_val["cnt"]
+    # store back to dict
+    data_dict[key] = curr_val
+
+
+def metric_sub(metric, sub):
+    "If prev_data, compute and return deltas"
+    metric["cnt"] -= sub["cnt"]
+    metric["sum"] -= sub["sum"]
+    if metric["cnt"]:
+        metric["avg"] = metric["sum"] / metric["cnt"]
+    else:
+        metric["avg"] = float('nan')
+    return metric
 
 
 def gen_pids(procname, args):
@@ -94,22 +123,6 @@ def gen_read_global():
         yield ("GLOBAL", line.rstrip())
 
 
-def merge_data(data_dict, key, values):
-    "Merge/aggregate each new latencytop line"
-    # Below indexes must be in sync w/FIELD_TO_NUM values
-    curr_val = data_dict.get(key, [0] * len(FIELD_TO_NUM.keys()))
-    # cnt: accumulate
-    curr_val[0] += int(values[0])
-    # sum: accumulate
-    curr_val[1] += int(values[1])
-    # max: compare and set new max
-    curr_val[2] = max(curr_val[2], int(values[2]))
-    # avg: calculate avg as sum/cnt
-    curr_val[3] = curr_val[1] / curr_val[0]
-    # store back to dict
-    data_dict[key] = curr_val
-
-
 def format_bt(cmd, backtrace, args):
     "Filter backtrace line by: heuristics (cleanup), --groupby"
     backtrace = re.sub(r'__refrigerator ', '', backtrace)
@@ -132,23 +145,35 @@ def format_bt(cmd, backtrace, args):
 def latency_show(procname, args):
     "Main loop to print stats"
     data = {}
-    orderby = FIELD_TO_NUM[args.orderby]
     if procname:
         cmd_lines = gen_read_file(gen_proc_filenames(gen_pids(procname, args)))
     else:
         cmd_lines = gen_read_global()
 
     for (cmd, line) in cmd_lines:
-        (ncalls, acc, top, backtrace) = line.split(" ", 3)
-        merge_data(data, format_bt(cmd, backtrace, args), (ncalls, acc, top))
+        (f_cnt, f_sum, f_max, backtrace) = line.split(" ", 3)
+        key = format_bt(cmd, backtrace, args)
+        metric = metric_init(key, (f_cnt, f_sum, f_max, 0))
+        metric_merge(data, key, metric)
+
+    if args.state_file and os.path.exists(args.state_file):
+        prev_data = pickle.load(open(args.state_file, "rb"))
+        pickle.dump(data, open(args.state_file, "wb"))
+    else:
+        prev_data = None
 
     if not args.no_headers:
-        print "{0:>6s}\t{1:>8s}\t{2:>8s}\t{3:>8s}\t{key:8s}".format(
-            *("cnt", "sum", "max", "avg"), key="key")
+        print "{0:>6s}\t{1:>8s}\t{2:>8s}\t{3:>8s}\t{4:8s}".format(
+            *("cnt", "sum", "max", "avg", "key"))
     output = []
-    for btrace, metrics in sorted(data.items(), key=lambda t: t[1][orderby]):
-        output.append("{0:6d}\t{1:8d}\t{2:8d}\t{3:8d}\t{key}".format(
-            *metrics, key=btrace))
+    for btrace, metric in sorted(data.items(),
+                                 key=lambda t: t[1][args.orderby]):
+        if prev_data and prev_data.get(btrace):
+            metric_sub(metric, prev_data[btrace])
+        if (metric['cnt'] == 0) and not args.show_zeroes:
+            continue
+        output.append("{cnt:6d}\t{sum:8d}\t{max:8d}\t{avg:8.0f}\t{key}".format(
+            **metric))
     print "\n".join(output[-args.limit:])
 
 
@@ -164,7 +189,7 @@ def main():
     par.add_argument('procname', type=str, nargs='*',
                      help=('process names regex (man pgrep), else use\n'
                            '/proc/latency_stats (global)'))
-    par.add_argument('-o', '--orderby', choices=FIELD_TO_NUM.keys(),
+    par.add_argument('-o', '--orderby', choices=METRICS,
                      default='max', help='metric to orderby')
     par.add_argument('-c', '--show-cmd', action='store_true',
                      default=False,
@@ -180,6 +205,10 @@ def main():
                      default=0, help='limit output to last LIMIT lines')
     par.add_argument('-t', '--threads', action='store_true',
                      default=False, help='also expand threads (LWPs)')
+    par.add_argument('-f', '--state-file', action='store',
+                     help='show delta values (prev.) stored at STATE_FILE')
+    par.add_argument('-z', '--show-zeroes', action='store_true',
+                     help='show lines with non-changed metrics')
     args = par.parse_args()
     if args.only_sys and args.groupby:
         raise argparse.ArgumentTypeError(
